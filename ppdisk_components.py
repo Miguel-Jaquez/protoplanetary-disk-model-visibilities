@@ -4,10 +4,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from google.colab import drive
-drive.mount('/content/drive/')
-
-import os
 # GEOMETRÍA DEL MODELO
 def build_coordinate_grids(geometry):
     """
