@@ -1,7 +1,14 @@
-# GEOMETRÍA DEL MODELO
+# MODELO
+# DISCO CENTRAL + ANILLOS + PLANETAS + ASIMETRÍAS AZIMUTALES
+
 import numpy as np
 import matplotlib.pyplot as plt
-import math
+
+from google.colab import drive
+drive.mount('/content/drive/')
+
+import os
+# GEOMETRÍA DEL MODELO
 def build_coordinate_grids(geometry):
     """
     Construye las coordenadas del plano del cielo y del plano
@@ -71,6 +78,56 @@ def build_coordinate_grids(geometry):
 
 
 # COMPONENTES AXISIMÉTRICAS
+# ============================================================
+# DISCO DE INTENSIDAD CONSTANTE
+# ============================================================
+def constant_intensity_disk_component(r_disk,
+                                      amp=1.0,
+                                      r_in_au=0.0,
+                                      r_out_au=100.0,
+                                      edge_smoothing_au=0.0):
+    """
+    Construye un disco con intensidad constante entre r_in_au y r_out_au.
+
+    I(r) = amp,  si r_in <= r <= r_out
+    I(r) = 0,    fuera de ese intervalo
+
+    Si edge_smoothing_au > 0, los bordes se suavizan con funciones tanh.
+    """
+
+    if r_in_au < 0:
+        raise ValueError("r_in_au debe ser >= 0.")
+
+    if r_out_au <= r_in_au:
+        raise ValueError("r_out_au debe ser mayor que r_in_au.")
+
+    if edge_smoothing_au < 0:
+        raise ValueError("edge_smoothing_au debe ser >= 0.")
+
+    if edge_smoothing_au == 0.0:
+        comp = np.zeros_like(r_disk)
+        mask = (r_disk >= r_in_au) & (r_disk <= r_out_au)
+        comp[mask] = amp
+        return comp
+
+    # Borde interno
+    # Si r_in_au = 0, no debe existir depresión central.
+    if np.isclose(r_in_au, 0.0):
+        inner_edge = np.ones_like(r_disk)
+    else:
+        inner_edge = 0.5 * (
+            1.0 + np.tanh((r_disk - r_in_au) / edge_smoothing_au)
+        )
+
+    # Borde externo
+    outer_edge = 0.5 * (
+        1.0 - np.tanh((r_disk - r_out_au) / edge_smoothing_au)
+    )
+
+    comp = amp * inner_edge * outer_edge
+
+    return comp
+
 def central_gaussian_component(r_disk, amp, sigma_au):
     """
     Componente central gaussiana:
@@ -96,30 +153,74 @@ def gaussian_ring_component(r_disk, amp, r0_au, sigma_au):
 def make_axisymmetric_disk(axisymmetric_disk, coords):
     """
     Construye el disco axisimétrico completo:
-    - componente central
-    - suma de anillos
+    - discos de intensidad constante
+    - componente central gaussiana
+    - suma de anillos gaussianos
     """
 
     r_disk = coords["r_disk"]
 
     img_total = np.zeros_like(r_disk)
+
+    img_constant_disks_total = np.zeros_like(r_disk)
     img_central = np.zeros_like(r_disk)
     img_rings_total = np.zeros_like(r_disk)
 
+    constant_disk_components = {}
     ring_components = {}
 
+    # ============================================================
+    # Discos de intensidad constante
+    # ============================================================
+    constant_disks = axisymmetric_disk.get("constant_disks", [])
+
+    for i, disk in enumerate(constant_disks):
+        if not disk.get("enabled", True):
+            continue
+
+        disk_name = disk.get("name", f"constant_disk_{i+1}")
+
+        disk_map = constant_intensity_disk_component(
+            r_disk=r_disk,
+            amp=disk.get("amp", 1.0),
+            r_in_au=disk.get("r_in_au", 0.0),
+            r_out_au=disk["r_out_au"],
+            edge_smoothing_au=disk.get("edge_smoothing_au", 0.0)
+        )
+
+        constant_disk_components[disk_name] = {
+            "map": disk_map,
+            "amp": disk.get("amp", 1.0),
+            "r_in_au": disk.get("r_in_au", 0.0),
+            "r_out_au": disk["r_out_au"],
+            "edge_smoothing_au": disk.get("edge_smoothing_au", 0.0),
+        }
+
+        img_constant_disks_total += disk_map
+        img_total += disk_map
+
+    # ============================================================
+    # Componente central gaussiana
+    # ============================================================
     central_cfg = axisymmetric_disk.get("central_component", {"enabled": False})
 
     if central_cfg.get("enabled", False):
         img_central = central_gaussian_component(
             r_disk=r_disk,
             amp=central_cfg["amp"],
-            sigma_au=central_cfg["sigma_au"])
+            sigma_au=central_cfg["sigma_au"]
+        )
         img_total += img_central
 
+    # ============================================================
+    # Anillos gaussianos
+    # ============================================================
     rings = axisymmetric_disk.get("rings", [])
 
     for i, ring in enumerate(rings):
+        if not ring.get("enabled", True):
+            continue
+
         ring_name = ring.get("name", f"ring_{i+1}")
 
         ring_map = gaussian_ring_component(
@@ -141,7 +242,12 @@ def make_axisymmetric_disk(axisymmetric_disk, coords):
 
     return {
         "img_total": img_total,
+
+        "img_constant_disks_total": img_constant_disks_total,
+        "constant_disk_components": constant_disk_components,
+
         "img_central": img_central,
+
         "img_rings_total": img_rings_total,
         "ring_components": ring_components,
     }
@@ -512,25 +618,27 @@ def build_intrinsic_emission_model(model_config):
     # Empaquetamos todo
     # -----------------------------
     return {
-        "coords": coords,
+      "coords": coords,
 
-        # Base axisimétrica
-        "img_axisym": img_axisym,
-        "img_central": axisym_result["img_central"],
-        "img_rings_total": axisym_result["img_rings_total"],
-        "ring_components": axisym_result["ring_components"],
+      # Base axisimétrica
+      "img_axisym": img_axisym,
+      "img_constant_disks_total": axisym_result["img_constant_disks_total"],
+      "constant_disk_components": axisym_result["constant_disk_components"],
+      "img_central": axisym_result["img_central"],
+      "img_rings_total": axisym_result["img_rings_total"],
+      "ring_components": axisym_result["ring_components"],
 
-        # Planetas
-        "img_planets_total": planets_result["img_planets_total"],
-        "planet_components": planets_result["planet_components"],
+      # Planetas
+      "img_planets_total": planets_result["img_planets_total"],
+      "planet_components": planets_result["planet_components"],
 
-        # Asimetrías
-        "img_asym_additive_total": asym_result["img_asym_additive_total"],
-        "img_asym_multiplicative_effect_total": asym_result["img_asym_multiplicative_effect_total"],
-        "asymmetry_components": asym_result["asymmetry_components"],
+      # Asimetrías
+      "img_asym_additive_total": asym_result["img_asym_additive_total"],
+      "img_asym_multiplicative_effect_total": asym_result["img_asym_multiplicative_effect_total"],
+      "asymmetry_components": asym_result["asymmetry_components"],
 
-        # Modelo final
-        "img_total": asym_result["img_total"],
+      # Modelo final
+      "img_total": asym_result["img_total"],
     }
 
 
@@ -1254,44 +1362,67 @@ def comparar_graficos(data1, data2, titulo1="Gráfico 1", titulo2="Gráfico 2"):
     plt.tight_layout()
     plt.show()
 
-def graficar_grid_imshow(lista_imagenes, titulos=None, label_barra="Intensidad", max_cols=3, cmap='viridis'):
+
+# to normalize using the spected noise
+def normalize_to_peak_snr(img, rms_noise, target_snr=100.0):
     """
-    Grafica N imágenes en cuadrícula.
-    'label_barra' puede ser un solo string (para todas) o una lista de strings (uno para cada imagen).
+    Normaliza una imagen para que su píxel de máxima emisión tenga
+    una razón señal-a-ruido especificada.
+
+    Parameters
+    ----------
+    img : 2D ndarray
+        Imagen sin ruido. Debe estar en las mismas unidades que rms_noise,
+        por ejemplo Jy/beam.
+    rms_noise : float
+        Ruido rms que se agregará después. Debe estar en las mismas
+        unidades que img.
+    target_snr : float
+        SNR deseado para el píxel de máxima emisión.
+
+    Returns
+    -------
+    result : dict
+        Contiene:
+            img_normalized
+            scale_factor
+            original_peak
+            target_peak
+            final_peak
+            rms_noise
+            target_snr
+            final_snr_peak
     """
-    n = len(lista_imagenes)
-    cols = min(n, max_cols)
-    rows = math.ceil(n / cols)
 
-    fig, ejes = plt.subplots(rows, cols, figsize=(5.8 * cols, 4.5 * rows))
+    if rms_noise <= 0:
+        raise ValueError("rms_noise debe ser > 0.")
 
-    if n > 1:
-        ejes_planos = ejes.flatten()
-    else:
-        ejes_planos = [ejes]
+    if target_snr <= 0:
+        raise ValueError("target_snr debe ser > 0.")
 
-    for i in range(len(ejes_planos)):
-        if i < n:
-            im = ejes_planos[i].imshow(lista_imagenes[i], cmap=cmap)
+    original_peak = np.max(img)
 
-            # --- Lógica inteligente para el label de la barra ---
-            if isinstance(label_barra, list) and i < len(label_barra):
-                label_actual = label_barra[i]
-            elif isinstance(label_barra, list): # Por si la lista de labels es más corta que las imágenes
-                label_actual = ""
-            else:
-                label_actual = label_barra # Si es un solo string, se usa el mismo para todas
+    if original_peak <= 0:
+        raise ValueError(
+            "El pico de la imagen es <= 0. "
+            "No se puede normalizar a un SNR positivo."
+        )
 
-            # Crear colorbar y asignar su label
-            cbar = fig.colorbar(im, ax=ejes_planos[i], fraction=0.046, pad=0.04)
-            cbar.set_label(label_actual, rotation=90, labelpad=15)
+    target_peak = target_snr * rms_noise
+    scale_factor = target_peak / original_peak
 
-            if titulos and i < len(titulos):
-                ejes_planos[i].set_title(titulos[i], pad=10)
-            ejes_planos[i].axis('off')
-        else:
-            ejes_planos[i].axis('off')
+    img_normalized = img * scale_factor
 
-    plt.tight_layout()
-    plt.show()
+    final_peak = np.max(img_normalized)
+    final_snr_peak = final_peak / rms_noise
 
+    return {
+        "img_normalized": img_normalized,
+        "scale_factor": scale_factor,
+        "original_peak": original_peak,
+        "target_peak": target_peak,
+        "final_peak": final_peak,
+        "rms_noise": rms_noise,
+        "target_snr": target_snr,
+        "final_snr_peak": final_snr_peak,
+    }
