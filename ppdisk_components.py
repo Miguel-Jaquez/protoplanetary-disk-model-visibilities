@@ -668,6 +668,7 @@ def plot_image(img, coords, title="", unit_label="relative intensity", plane="sk
     plt.ylabel(ylabel)
     plt.title(title)
     plt.colorbar(im, label=unit_label)
+    plt.grid(True)
     plt.tight_layout()
     plt.savefig(title + '.png')
     plt.show()

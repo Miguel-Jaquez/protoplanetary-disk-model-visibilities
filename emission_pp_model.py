@@ -301,6 +301,36 @@ def run_from_config(config: dict[str, Any]) -> dict[str, Any]:
         )
         products["img_jyarcsec2"] = image_jyarcsec2
 
+        if run_config["output"].get("make_plots", False):
+            plot_image(
+                image_jyarcsec2,
+                coords,
+                title=str(output_dir / "img_jyarcsec"),
+                unit_label="Jy/arcsec^2",
+                plane="sky",
+            )
+            plot_image(
+                obs_result["img_convolved_jypix"],
+                coords,
+                title=str(output_dir / "img_convolved_jypix"),
+                unit_label="Jy/pixel",
+                plane="sky",
+            )
+            plot_image(
+                obs_result["img_convolved_jybeam"],
+                coords,
+                title=str(output_dir / "img_convolved_jybeam"),
+                unit_label="Jy/beam",
+                plane="sky",
+            )
+            plot_image(
+                obs_result["img_noisy_jybeam"],
+                coords,
+                title=str(output_dir / "img_convolved_jybeam_noisy"),
+                unit_label="Jy/beam",
+                plane="sky",
+            )
+
         if run_config["output"].get("write_fits", True):
             write_fits_image(output_dir / "img_jyarcsec.fits", image_jyarcsec2)
             write_fits_image(
